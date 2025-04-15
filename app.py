@@ -7,22 +7,31 @@ Original file is located at
     https://colab.research.google.com/drive/1M7DNg9hO5wNIw8sUU4OYRhrZtcvWDIUZ
 """
 
+# Easy-to-Understand and Tuned BERT Implementation for Emotion-to-Sentiment Classification (with Scheduler & Improvements)
+
 import streamlit as st
 import torch
 import torch.nn as nn
 from transformers import BertTokenizer, BertModel
 import pickle
+import gdown
+import os
 
-# Load label encoder and tokenizer
+# Download model if not already present
+model_url = "https://drive.google.com/uc?id=1JViBqhHejG9Uuv_y2_8bmbIYwaEWkU4j"
+model_path = "best_model.pt"
+if not os.path.exists(model_path):
+    gdown.download(model_url, model_path, quiet=False)
+
+# Load model components
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 with open("emotion_encoder.pkl", "rb") as f:
     emotion_encoder = pickle.load(f)
 
-tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-
-# Sentiment mapping
 positive = ['admiration', 'amusement', 'approval', 'caring', 'desire', 'excitement', 'gratitude', 'joy', 'love', 'optimism', 'pride', 'relief']
 neutral = ['neutral', 'curiosity', 'realization', 'confusion']
 negative = ['anger', 'annoyance', 'disappointment', 'disapproval', 'disgust', 'embarrassment', 'fear', 'grief', 'nervousness', 'remorse', 'sadness']
+
 
 def get_sentiment(label):
     if label in positive:
@@ -32,7 +41,7 @@ def get_sentiment(label):
     else:
         return 'negative'
 
-# Model class (must match training)
+
 class EmotionToSentimentModel(nn.Module):
     def __init__(self, num_emotions):
         super().__init__()
@@ -43,7 +52,8 @@ class EmotionToSentimentModel(nn.Module):
     def forward(self, input_ids, attention_mask):
         pooled_output = self.bert(input_ids=input_ids, attention_mask=attention_mask).pooler_output
         dropped = self.dropout(pooled_output)
-        return self.emotion_classifier(dropped)
+        emotion_logits = self.emotion_classifier(dropped)
+        return emotion_logits
 
 # Load model
 num_emotions = len(emotion_encoder.classes_)
@@ -53,29 +63,36 @@ model.load_state_dict(torch.load("best_model.pt", map_location=device))
 model.to(device)
 model.eval()
 
-# Prediction function
-def predict(text):
+# Streamlit UI
+st.title("Emotion & Sentiment Classifier for Movie Comments")
+st.write("This app classifies the **emotion** of your movie-related text and derives its **sentiment**.")
+
+input_text = st.text_area("Enter a movie comment or review:", height=120)
+
+
+def predict_emotion_and_sentiment(text):
     with torch.no_grad():
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(device)
-        logits = model(inputs['input_ids'], inputs['attention_mask'])
+        encoding = tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(device)
+        logits = model(encoding['input_ids'], encoding['attention_mask'])
         probs = torch.softmax(logits, dim=1).squeeze().cpu().numpy()
+
         top_indices = probs.argsort()[-3:][::-1]
         top_emotions = [(emotion_encoder.inverse_transform([i])[0], round(probs[i]*100, 2)) for i in top_indices]
+
         final_emotion = top_emotions[0][0]
         final_sentiment = get_sentiment(final_emotion)
+
         return final_emotion, final_sentiment, top_emotions
 
-# UI
-st.title("🎬 Emotion & Sentiment Analyzer for Movie Reviews")
-text = st.text_area("Enter a movie review:")
 
-if st.button("Analyze"):
-    if text.strip():
-        emotion, sentiment, top3 = predict(text)
-        st.success(f"**Emotion:** {emotion}")
-        st.info(f"**Sentiment:** {sentiment}")
-        st.markdown("### Top 3 Emotion Predictions:")
-        for emo, conf in top3:
-            st.markdown(f"- **{emo}**: {conf}%")
-    else:
-        st.warning("Please enter some text.")
+if st.button("Predict") and input_text.strip():
+    emotion, sentiment, top3 = predict_emotion_and_sentiment(input_text)
+    st.markdown("---")
+    st.subheader("Prediction Results")
+    st.write(f"**Final Emotion:** {emotion}")
+    st.write(f"**Derived Sentiment:** {sentiment}")
+    st.markdown("**Top 3 Emotion Predictions with Confidence:**")
+    for emo, conf in top3:
+        st.write(f"- {emo}: {conf}%")
+    st.markdown("---")
+    st.success("Prediction complete.")
